@@ -1,0 +1,2 @@
+getmac==0.9.4
+customtkinter==5.2.2
