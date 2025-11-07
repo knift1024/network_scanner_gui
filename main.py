@@ -15,32 +15,50 @@ import json
 
 # --- Core Scanning Logic ---
 
-def find_vendor_online(mac_address, api_key):
-    """Finds the vendor from macaddress.io API using the provided API key."""
-    if not mac_address or mac_address == "N/A":
-        return "N/A"
+def find_vendor_primary(mac_address):
+    """Primary, key-less API lookup (maclookup.app/v2)."""
+    try:
+        url = f"https://api.maclookup.app/v2/macs/{urllib.parse.quote(mac_address)}"
+        request = urllib.request.Request(url, headers={'User-Agent': 'Python-Network-Scanner'})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                if data.get('success') and data.get('company'):
+                    return data['company']
+                else:
+                    return "N/A"
+            return None # Return None to indicate failure and trigger fallback
+    except Exception:
+        return None # Return None to indicate failure and trigger fallback
+
+def find_vendor_fallback(mac_address, api_key):
+    """Fallback API lookup (macaddress.io) using a user-provided key."""
     if not api_key or api_key == "YOUR_API_KEY_HERE":
-        return "(No API Key)"
+        return "(No Fallback Key)"
     try:
         url = f"https://api.macaddress.io/v1?apiKey={api_key}&output=json&search={urllib.parse.quote(mac_address)}"
-        
         request = urllib.request.Request(url, headers={'User-Agent': 'Python-Network-Scanner'})
-
         with urllib.request.urlopen(request, timeout=3) as response:
             if response.status == 200:
                 data = json.loads(response.read().decode('utf-8'))
                 return data.get('vendorDetails', {}).get('companyName', "N/A")
-            else:
-                return f"(API Error {response.status})"
-
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            return "(Invalid API Key)"
-        return f"(HTTP Error {e.code})"
-    except (urllib.error.URLError, socket.timeout):
-        return "(Network Error)"
+            return "(Fallback Failed)"
     except Exception:
-        return "(Error)"
+        return "(Fallback Failed)"
+
+def find_vendor(mac_address, api_key):
+    """Tries the primary API first, then the fallback API."""
+    if not mac_address or mac_address == "N/A":
+        return "N/A"
+    
+    # Try primary API
+    vendor = find_vendor_primary(mac_address)
+    
+    # If primary fails, try fallback
+    if vendor is None:
+        vendor = find_vendor_fallback(mac_address, api_key)
+        
+    return vendor
 
 def ping_host(ip_queue, results_queue):
     """Pings IPs from the queue and puts active ones in the results_queue."""
@@ -74,7 +92,7 @@ def get_details(ip, api_key):
         mac = get_mac_address(ip=ip, network_request=True)
         if mac and mac != "00:00:00:00:00:00":
             mac_address = mac.upper()
-            vendor = find_vendor_online(mac_address, api_key)
+            vendor = find_vendor(mac_address, api_key)
     except Exception:
         pass
 
@@ -132,7 +150,7 @@ class App(customtkinter.CTk):
         self.status_frame = customtkinter.CTkFrame(self, height=30)
         self.status_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
         
-        self.status_label = customtkinter.CTkLabel(self.status_frame, text="Ready. Please set your API key in config.ini")
+        self.status_label = customtkinter.CTkLabel(self.status_frame, text="Ready. Uses maclookup.app (no key) with macaddress.io as fallback.")
         self.status_label.pack(side="left", padx=10)
 
         self.progress_bar = customtkinter.CTkProgressBar(self.status_frame)
@@ -225,7 +243,7 @@ class App(customtkinter.CTk):
         ping_queue.join()
         
         active_hosts = sorted(list(active_hosts_queue.queue), key=ipaddress.IPv4Address)
-        self.results_queue.put(f"STATUS:Found {len(active_hosts)} active hosts. Getting details (using online API)...")
+        self.results_queue.put(f"STATUS:Found {len(active_hosts)} active hosts. Getting details (using online APIs)...")
         self.results_queue.put("PROGRESS:0.5")
 
         scan_results_temp = []
